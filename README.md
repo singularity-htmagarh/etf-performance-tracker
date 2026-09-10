@@ -88,3 +88,118 @@ Streamlit will display a local URL, typically `http://localhost:8501`.
 - Yahoo Finance availability, rate limits, missing symbols, and incomplete histories can result in missing values.
 - The Sharpe ratio uses a fixed 4.5% annual risk-free-rate proxy defined in `data_engine.py`; it is not automatically updated.
 - Results are for research and monitoring only and are not investment advice.
+
+# ETF Warehouse (DuckDB)
+
+Local DuckDB data layer for the ETF Performance Tracker. Stores US and
+Canada ETF data in **separate schemas** so the two are never mixed,
+and gives the Streamlit app a fast, offline-capable read path instead
+of hitting Yahoo Finance on every page load.
+
+## Layout
+
+```
+warehouse/
+  schema.sql          DDL — run automatically on first connection
+  connection.py        get_connection(), schema_for(region)
+  ingest.py             ETL job: Yahoo Finance -> DuckDB
+  queries.py             Read helpers used by app.py
+  etf_warehouse.duckdb  the actual database file (git-ignored, created on first ingest)
+```
+
+## Schema
+
+Two schemas, identical structure, kept fully separate:
+
+| Schema    | Region |
+|-----------|--------|
+| `us_etf`  | US-listed ETFs |
+| `ca_etf`  | Canada (TSX)-listed ETFs (`.TO` tickers) |
+
+Each has:
+
+- **`funds`** — one row per ticker: name, category, issuer, currency,
+  AUM, expense ratio, dividend yield, `last_updated`. Overwritten in
+  full on every sync for that region.
+- **`prices`** — one row per `(ticker, price_date)`: adjusted close.
+  Upserted per ticker (old rows for a ticker are deleted and replaced
+  with the freshly pulled range) so re-syncing is idempotent — no
+  duplicate rows, no manual cleanup.
+
+A shared `main.ingestion_log` table records every sync (region,
+timing, tickers requested/loaded, price rows written, status, notes)
+for auditability — same spirit as the run logging in the rest of the
+personal trading infrastructure.
+
+**Note:** the $1B AUM liquidity screen is *not* applied at ingestion
+time — the warehouse stores the full candidate universe (see
+`etf_universe.py`) as-is. The filter is applied at read time in
+`app.py`, so moving the AUM slider in the UI doesn't require
+re-ingesting.
+
+## Usage
+
+### First-time setup / manual refresh
+
+```bash
+# both regions, 3 years of price history (default)
+python -m warehouse.ingest
+
+# one region only
+python -m warehouse.ingest --region US
+python -m warehouse.ingest --region Canada
+
+# longer history
+python -m warehouse.ingest --period 5y
+```
+
+This creates `warehouse/etf_warehouse.duckdb` if it doesn't exist yet,
+applies `schema.sql`, and upserts fund metadata + prices.
+
+### From the Streamlit app
+
+`app.py` reads from the warehouse by default via `warehouse/queries.py`.
+The sidebar has a **"🔄 Sync from Yahoo Finance now"** button that
+calls the same `run_ingestion()` function used by the CLI, for the
+currently-selected region(s), then clears the Streamlit cache and
+reruns. If a selected region has never been synced, the app tells you
+and stops rather than silently showing nothing.
+
+### Scheduling
+
+`run_ingestion()` / `run_full_refresh()` in `ingest.py` are plain
+functions with no Streamlit dependency, so they drop straight into a
+Prefect flow or a scheduled GitHub Actions job the same way the rest
+of the personal trading infra is orchestrated — e.g. a nightly
+`python -m warehouse.ingest` after market close.
+
+## Querying directly
+
+```python
+from warehouse.queries import load_funds, load_prices, get_last_ingestion
+
+us_funds = load_funds("US")                 # DataFrame indexed by ticker
+us_prices = load_prices("US")                # wide DataFrame, date index
+spy_only = load_prices("US", tickers=["SPY"])
+get_last_ingestion()                          # latest run per region
+```
+
+Or with raw SQL via `warehouse.connection.get_connection()`:
+
+```python
+from warehouse.connection import get_connection
+
+con = get_connection(read_only=True)
+con.execute("SELECT ticker, aum FROM us_etf.funds ORDER BY aum DESC LIMIT 10").fetchdf()
+```
+
+## Why not name this folder `duckdb/`?
+
+Because a subfolder literally named `duckdb` sitting at the repo root
+shadows the real `duckdb` PyPI package the moment the repo root is on
+`sys.path` (which it is when you run `streamlit run app.py` from the
+repo root) — every `import duckdb` anywhere in the app, including the
+genuine library import inside these files, would resolve to the local
+folder instead and break. `warehouse/` avoids the collision while
+keeping the same "DuckDB warehouse" naming already used elsewhere in
+the personal trading infra.

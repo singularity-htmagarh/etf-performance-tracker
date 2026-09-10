@@ -1,0 +1,18 @@
+# DuckDB warehouse file — local data, not source. Each environment
+# builds its own via `python -m warehouse.ingest`.
+warehouse/*.duckdb
+warehouse/*.duckdb.wal
+ 
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+ 
+# Streamlit
+.streamlit/secrets.toml
+ 
+# OS
+.DS_Store
+ 

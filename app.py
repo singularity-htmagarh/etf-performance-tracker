@@ -8,9 +8,17 @@ Run:
     streamlit run app.py
  
 Data:
-    yfinance (Yahoo Finance) — adjusted daily close prices + fund
-    metadata (AUM, expense ratio, yield). AUM > $1B is enforced as a
-    hard liquidity screen before anything else in the app runs.
+    The app reads from the local DuckDB warehouse (warehouse/etf_warehouse.duckdb)
+    by default — fast, and works offline. The warehouse itself is populated by
+    warehouse/ingest.py, which pulls adjusted daily closes + fund metadata (AUM,
+    expense ratio, yield) from Yahoo Finance via yfinance. Run it once before
+    first use:
+ 
+        python -m warehouse.ingest
+ 
+    or click "Sync from Yahoo Finance now" in the sidebar to run it inline.
+    AUM > $1B is enforced as a liquidity screen at read time, so the threshold
+    is adjustable in the UI without needing to re-ingest.
 """
  
 from __future__ import annotations
@@ -22,14 +30,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
  
-from etf_universe import ALL_TICKERS, META_BY_TICKER
-from data_engine import (
-    fetch_fund_info,
-    fetch_price_history,
-    compute_performance_table,
-    apply_liquidity_screen,
-    MIN_AUM,
-)
+from etf_universe import META_BY_TICKER
+from data_engine import compute_performance_table, apply_liquidity_screen, MIN_AUM
+from warehouse.queries import load_funds_multi, load_prices_multi, get_last_ingestion, warehouse_is_populated
+from warehouse.ingest import run_ingestion
  
 # --------------------------------------------------------------------------
 # Page config & style
@@ -59,14 +63,14 @@ PCT_COLS = ["1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "Vol_1Y_Ann", "MaxD
 # Cached data layer
 # --------------------------------------------------------------------------
  
-@st.cache_data(ttl=60 * 60, show_spinner=False)
-def load_fund_info(tickers: tuple[str, ...]) -> pd.DataFrame:
-    return fetch_fund_info(list(tickers))
+@st.cache_data(ttl=15 * 60, show_spinner=False)
+def load_fund_info_from_warehouse(regions: tuple[str, ...]) -> pd.DataFrame:
+    return load_funds_multi(list(regions))
  
  
 @st.cache_data(ttl=15 * 60, show_spinner=False)
-def load_prices(tickers: tuple[str, ...], period: str) -> pd.DataFrame:
-    return fetch_price_history(list(tickers), period=period)
+def load_prices_from_warehouse(regions: tuple[str, ...]) -> pd.DataFrame:
+    return load_prices_multi(list(regions))
  
  
 def style_pct(df: pd.DataFrame, cols: list[str]) -> pd.io.formats.style.Styler:
@@ -102,7 +106,8 @@ with st.sidebar:
         "Price history window",
         options=["1y", "2y", "3y", "5y"],
         index=2,
-        help="Longer windows are needed for 3Y return / drawdown stats.",
+        help="Longer windows are needed for 3Y return / drawdown stats. Re-sync after "
+             "changing this if you need more history than the warehouse currently holds.",
     )
     benchmark = st.selectbox(
         "Benchmark (for beta)",
@@ -111,41 +116,76 @@ with st.sidebar:
     )
     st.divider()
     region_filter = st.multiselect("Region", options=["US", "Canada"], default=["US", "Canada"])
+ 
     st.divider()
-    refresh = st.button("🔄 Force refresh data", use_container_width=True)
-    if refresh:
+    st.subheader("Warehouse")
+    for r in ["US", "Canada"]:
+        last = get_last_ingestion(region=r)
+        if last.empty:
+            st.caption(f"**{r}:** never synced")
+        else:
+            row = last.iloc[0]
+            ts = pd.to_datetime(row["finished_at"]).strftime("%Y-%m-%d %H:%M")
+            st.caption(f"**{r}:** {row['tickers_loaded']} ETFs · synced {ts} · {row['status']}")
+ 
+    sync_clicked = st.button("🔄 Sync from Yahoo Finance now", use_container_width=True)
+    if sync_clicked:
+        for r in (region_filter or ["US", "Canada"]):
+            with st.spinner(f"Syncing {r} ETFs from Yahoo Finance..."):
+                summary = run_ingestion(r, period=period_choice)
+            if summary["status"] == "failed":
+                st.error(f"{r} sync failed: {summary['note']}")
+            else:
+                st.success(f"{r}: {summary['tickers_loaded']}/{summary['tickers_requested']} ETFs synced.")
         st.cache_data.clear()
-    st.caption(f"Last loaded: {dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        st.rerun()
+ 
     st.markdown(
-        '<p class="small-note">Data: Yahoo Finance via yfinance. AUM and expense ratios '
-        "are as last reported by the fund issuer and may lag the live tape by up to a day. "
-        "Not investment advice.</p>",
+        '<p class="small-note">Reads come from the local DuckDB warehouse. AUM and expense '
+        "ratios are as of the last sync and may lag the live tape. Not investment advice.</p>",
         unsafe_allow_html=True,
     )
  
 # --------------------------------------------------------------------------
-# Load & screen data
+# Load & screen data (from the DuckDB warehouse)
 # --------------------------------------------------------------------------
  
-with st.spinner("Pulling fund metadata and enforcing AUM screen..."):
-    fund_info_raw = load_fund_info(tuple(ALL_TICKERS))
+if not region_filter:
+    st.warning("Select at least one region in the sidebar.")
+    st.stop()
+ 
+unpopulated = [r for r in region_filter if not warehouse_is_populated(r)]
+if unpopulated:
+    st.info(
+        f"The warehouse has no data yet for: **{', '.join(unpopulated)}**. "
+        "Run `python -m warehouse.ingest` once from the repo root, or click "
+        "**🔄 Sync from Yahoo Finance now** in the sidebar, to populate it."
+    )
+    st.stop()
+ 
+with st.spinner("Reading fund metadata from the warehouse..."):
+    fund_info_raw = load_fund_info_from_warehouse(tuple(region_filter))
  
 screened = apply_liquidity_screen(fund_info_raw, min_aum=min_aum_b * 1e9)
-screened = screened[screened["region"].isin(region_filter)] if region_filter else screened
  
 if screened.empty:
     st.warning("No ETFs passed the current AUM/region filters. Loosen the filters in the sidebar.")
     st.stop()
  
-tickers_in_scope = tuple(screened.index.tolist())
- 
-with st.spinner(f"Pulling price history for {len(tickers_in_scope)} ETFs..."):
-    prices = load_prices(tickers_in_scope, period=period_choice)
+with st.spinner("Reading price history from the warehouse..."):
+    prices = load_prices_from_warehouse(tuple(region_filter))
+prices = prices[[c for c in screened.index if c in prices.columns]]
  
 if benchmark not in prices.columns:
-    with st.spinner("Pulling benchmark series..."):
-        bench_prices = load_prices((benchmark,), period=period_choice)
-    prices = prices.join(bench_prices, how="outer")
+    bench_region = META_BY_TICKER[benchmark].region if benchmark in META_BY_TICKER else "US"
+    if warehouse_is_populated(bench_region):
+        bench_all = load_prices_from_warehouse((bench_region,))
+        if benchmark in bench_all.columns:
+            prices = prices.join(bench_all[[benchmark]], how="outer")
+    if benchmark not in prices.columns:
+        st.warning(
+            f"Benchmark {benchmark} isn't in the warehouse yet — sync its region to enable beta."
+        )
  
 perf = compute_performance_table(prices, screened, benchmark=benchmark)
 perf = perf.sort_values("aum", ascending=False)
