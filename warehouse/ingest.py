@@ -11,7 +11,7 @@ Run directly:
     python -m warehouse.ingest --region Canada  # Canada only
     python -m warehouse.ingest --period 5y      # longer price history
  
-This is also what the Streamlit app's "Sync from Yahoo Finance" sidebar
+This is also what the Django app's "Sync from Yahoo Finance" sidebar
 button calls under the hood — same function, so a scheduled run (cron,
 GitHub Actions, Prefect flow — matches the pattern already used for
 Heath's other DuckDB pipelines) and an ad-hoc manual click stay
@@ -20,7 +20,7 @@ identical in behavior.
 The $1B AUM liquidity floor is intentionally NOT applied at ingestion
 time. The warehouse stores everything in the candidate universe as-is;
 the AUM filter is applied at query/read time (see queries.py and
-app.py) so the threshold stays adjustable in the UI without needing to
+dashboard/services.py) so the threshold stays adjustable in the UI without needing to
 re-ingest.
 """
  
@@ -33,7 +33,7 @@ from pathlib import Path
  
 # Make the repo root importable regardless of how this module is invoked
 # (python warehouse/ingest.py, python -m warehouse.ingest, or imported
-# from app.py) — avoids depending on the caller's working directory.
+# from Django) — avoids depending on the caller's working directory.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))

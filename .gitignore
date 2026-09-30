@@ -10,8 +10,8 @@ __pycache__/
 venv/
 .env
  
-# Streamlit
-.streamlit/secrets.toml
+# Django local database
+django.sqlite3
  
 # OS
 .DS_Store

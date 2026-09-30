@@ -1,10 +1,10 @@
 """
 warehouse/queries.py
 ----------------------
-Read-only helpers the Streamlit app uses to pull data out of the
+Read-only helpers the Django app uses to pull data out of the
 DuckDB warehouse. Returns pandas DataFrames shaped exactly like the
 live-fetch functions in data_engine.py (same columns/index), so
-app.py's downstream code (compute_performance_table, apply_liquidity_screen,
+dashboard's downstream code (compute_performance_table, apply_liquidity_screen,
 etc.) doesn't need to know whether the data came from Yahoo Finance
 directly or from the warehouse.
 """

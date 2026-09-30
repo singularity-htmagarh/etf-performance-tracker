@@ -1,0 +1,165 @@
+{% extends "dashboard/base.html" %}
+{% load static %}
+{% block content %}
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="/">
+      <span class="brand-mark" aria-hidden="true">ETF</span>
+      <span><strong>MARKET</strong><small>PERFORMANCE TRACKER</small></span>
+    </a>
+    <p class="side-label">UNIVERSE CONTROLS</p>
+    <form method="get" class="filters-form" id="global-filters">
+      <input type="hidden" name="regions_present" value="1">
+      <input type="hidden" name="tab" value="{{ active_tab }}">
+      <fieldset class="region-options">
+        <legend>Region</legend>
+        {% for option in region_options %}
+        <label class="check-row"><input type="checkbox" name="region" value="{{ option }}" {% if option in regions %}checked{% endif %}><span>{{ option }}</span></label>
+        {% endfor %}
+      </fieldset>
+      <label class="field-label" for="min-aum">Minimum AUM <strong>${{ min_aum_b|floatformat:1 }}B</strong></label>
+      <input id="min-aum" type="range" name="min_aum" min="1" max="50" step="0.5" value="{{ min_aum_b }}">
+      <label class="field-label" for="period">Price history window</label>
+      <select id="period" name="period">
+        {% for option in period_options %}<option value="{{ option }}" {% if option == period %}selected{% endif %}>{{ option|upper }}</option>{% endfor %}
+      </select>
+      <label class="field-label" for="benchmark">Beta benchmark</label>
+      <select id="benchmark" name="benchmark">
+        {% for option in benchmark_options %}<option value="{{ option }}" {% if option == benchmark %}selected{% endif %}>{{ option }}</option>{% endfor %}
+      </select>
+      <button class="button button-primary apply-button" type="submit">Apply filters</button>
+    </form>
+
+    <div class="side-divider"></div>
+    <div class="warehouse-heading"><p class="side-label">WAREHOUSE</p><span class="status-dot"></span></div>
+    <div class="sync-status-list">
+      {% for item in last_sync %}
+      <div class="sync-status"><span>{{ item.region }}</span><span>{{ item.status }}</span><small>{% if item.synced %}{{ item.synced }}{% endif %}</small></div>
+      {% endfor %}
+    </div>
+    <form method="post" action="{% url 'dashboard:sync' %}" class="sync-form">
+      {% csrf_token %}
+      {% for region in regions %}<input type="hidden" name="region" value="{{ region }}">{% endfor %}
+      <input type="hidden" name="period" value="{{ period }}">
+      <input type="hidden" name="return_query" value="{{ request.GET.urlencode }}">
+      <button class="button button-outline" type="submit"><span aria-hidden="true">↻</span> Sync from Yahoo Finance</button>
+    </form>
+    <p class="side-note">Local DuckDB data · metadata may lag the live market. Research use only.</p>
+  </aside>
+
+  <main class="main-content">
+    <header class="page-header">
+      <div><p class="eyebrow">US & CANADA · LIQUID ETF UNIVERSE</p><h1>ETF Performance Tracker</h1>
+      {% if has_data %}<p class="subtitle">Tracking <strong>{{ performance_count }}</strong> ETFs above <strong>${{ min_aum_b|floatformat:1 }}B</strong> across {{ region_count }} region(s) and {{ category_count }} categories.</p>{% else %}<p class="subtitle">Performance, risk, and positioning across large, liquid exchange-traded funds.</p>{% endif %}</div>
+      <span class="market-badge"><i></i> WAREHOUSE VIEW</span>
+    </header>
+
+    {% if has_data %}
+    <section class="kpi-grid" aria-label="Market summary">
+      <article class="kpi"><span>ETFs IN SCOPE</span><strong>{{ performance_count }}</strong><small>Current filters</small></article>
+      <article class="kpi"><span>TOTAL AUM TRACKED</span><strong>{{ total_aum }}</strong><small>Across selected regions</small></article>
+      <article class="kpi"><span>BEST 1D</span><strong>{{ best_ticker }}</strong><small class="positive">{{ best_return }}</small></article>
+      <article class="kpi"><span>WORST 1D</span><strong>{{ worst_ticker }}</strong><small class="negative">{{ worst_return }}</small></article>
+      <article class="kpi"><span>AVERAGE YTD</span><strong>{{ average_ytd }}</strong><small>Equal-weighted</small></article>
+    </section>
+
+    <nav class="tabs" aria-label="Dashboard sections">
+      <a href="?tab=overview" data-tab-link="overview" class="{% if active_tab == 'overview' %}active{% endif %}">Market Overview</a>
+      <a href="?tab=table" data-tab-link="table" class="{% if active_tab == 'table' %}active{% endif %}">Performance Table</a>
+      <a href="?tab=charts" data-tab-link="charts" class="{% if active_tab == 'charts' %}active{% endif %}">Comparison Charts</a>
+      <a href="?tab=correlation" data-tab-link="correlation" class="{% if active_tab == 'correlation' %}active{% endif %}">Correlation</a>
+      <a href="?tab=detail" data-tab-link="detail" class="{% if active_tab == 'detail' %}active{% endif %}">ETF Detail</a>
+    </nav>
+
+    {% if active_tab == 'overview' %}
+    <section class="content-section overview-grid">
+      <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">RELATIVE PERFORMANCE</p><h2>Category performance</h2></div><span class="unit-note">AUM-weighted · 1M</span></div><div id="category-chart" class="chart"></div></article>
+      <article class="panel movers-panel"><div class="panel-heading"><div><p class="eyebrow">DAILY LEADERSHIP</p><h2>Top movers</h2></div><span class="unit-note">1D return</span></div>
+        <h3 class="list-title">Gainers</h3>{% for row in gainers %}<div class="mover-row"><span><b>{{ row.ticker }}</b><small>{{ row.name }}</small></span><strong class="positive">{{ row.return }}</strong></div>{% empty %}<p class="muted">No daily returns available.</p>{% endfor %}
+        <h3 class="list-title decliner-title">Decliners</h3>{% for row in decliners %}<div class="mover-row"><span><b>{{ row.ticker }}</b><small>{{ row.name }}</small></span><strong class="negative">{{ row.return }}</strong></div>{% empty %}<p class="muted">No daily returns available.</p>{% endfor %}
+      </article>
+      <article class="panel issuer-panel"><div class="panel-heading"><div><p class="eyebrow">FUND PROVIDERS</p><h2>AUM concentration by issuer</h2></div></div><div id="issuer-chart" class="chart chart-treemap"></div></article>
+    </section>
+    {% elif active_tab == 'table' %}
+    <section class="content-section">
+      <div class="section-heading"><div><p class="eyebrow">UNIVERSE SCREENER</p><h2>Full performance &amp; risk table</h2></div>
+        <a class="button button-outline download-button" href="?{{ request.GET.urlencode }}&amp;download=csv">Download CSV</a></div>
+      <form method="get" class="table-filters">
+        {% for name, value in global_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="tab" value="table"><input type="hidden" name="categories_present" value="1">
+        <fieldset class="category-filter"><legend>Filter by category</legend><div class="category-options">
+          {% for category in categories %}<label><input type="checkbox" name="category" value="{{ category }}" {% if category in selected_categories %}checked{% endif %}>{{ category }}</label>{% endfor %}
+        </div></fieldset>
+        <div class="table-filter-controls"><label>Sort by<select name="sort">{% for option in sort_columns %}<option value="{{ option }}" {% if option == sort_column %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+          <label>Show top N<input type="number" name="top_n" min="5" max="{{ performance_count }}" value="{{ top_n }}"></label><button class="button button-primary" type="submit">Update table</button></div>
+      </form>
+      <div class="table-wrap"><table class="performance-table"><thead><tr><th>Ticker</th>{% for column in table_columns %}<th>{{ column }}</th>{% endfor %}</tr></thead><tbody>
+        {% for row in table_rows %}<tr><th>{{ row.ticker }}</th>{% for value in row.cells %}<td>{{ value }}</td>{% endfor %}</tr>{% endfor %}
+      </tbody></table></div>
+      <p class="table-footnote">Showing {{ table_rows|length }} of {{ performance_count }} ETFs · returns calculated from adjusted daily closes.</p>
+    </section>
+    {% elif active_tab == 'charts' %}
+    <section class="content-section">
+      <div class="section-heading"><div><p class="eyebrow">RELATIVE PRICE ACTION</p><h2>Comparison charts</h2></div></div>
+      <article class="panel full-panel"><form method="get" class="selection-form">
+        {% for name, value in global_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="tab" value="charts"><input type="hidden" name="compare_present" value="1">
+        <label class="wide-select">Select ETFs to compare <span>Normalized to 100 at the start of the window</span><select name="compare" multiple size="5">
+          {% for option in ticker_options %}<option value="{{ option.ticker }}" {% if option.ticker in selected_compare %}selected{% endif %}>{{ option.ticker }} — {{ option.name }}</option>{% endfor %}
+        </select></label><button class="button button-primary" type="submit">Update charts</button>
+      </form><h3>Normalized price performance</h3>
+      {% if comparison_chart %}<div id="comparison-chart" class="chart chart-large"></div><h3 class="chart-subheading">Drawdown comparison</h3><div id="drawdown-chart" class="chart chart-medium"></div>{% else %}<p class="muted">Select at least one ETF with price history to render the comparison charts.</p>{% endif %}</article>
+    </section>
+    {% elif active_tab == 'correlation' %}
+    <section class="content-section"><div class="section-heading"><div><p class="eyebrow">PORTFOLIO CONSTRUCTION</p><h2>Return correlation matrix</h2></div></div>
+      <article class="panel full-panel"><form method="get" class="selection-form">
+        {% for name, value in global_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="tab" value="correlation"><input type="hidden" name="correlation_present" value="1">
+        <label class="wide-select">ETFs to include <span>Select at least two for pairwise daily-return correlations</span><select name="correlation_ticker" multiple size="6">
+          {% for option in ticker_options %}<option value="{{ option.ticker }}" {% if option.ticker in selected_correlation %}selected{% endif %}>{{ option.ticker }} — {{ option.name }}</option>{% endfor %}
+        </select></label><button class="button button-primary" type="submit">Update matrix</button>
+      </form>{% if correlation_chart %}<div id="correlation-chart" class="chart chart-correlation"></div><p class="muted">Lower or negative correlation can indicate diversification potential; correlation is not a guarantee of risk reduction.</p>{% else %}<p class="muted">Select at least two ETFs with price history to build a correlation matrix.</p>{% endif %}</article>
+    </section>
+    {% else %}
+    <section class="content-section"><div class="section-heading"><div><p class="eyebrow">FUND PROFILE</p><h2>ETF detail</h2></div></div>
+      <article class="panel full-panel detail-panel"><form method="get" class="detail-select-form">
+        {% for name, value in global_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="tab" value="detail"><label for="ticker">Choose an ETF</label><select id="ticker" name="ticker">
+          {% for option in ticker_options %}<option value="{{ option.ticker }}" {% if option.ticker == selected_ticker %}selected{% endif %}>{{ option.ticker }} — {{ option.name }}</option>{% endfor %}
+        </select><button class="button button-primary" type="submit">View ETF</button>
+      </form>
+      <div class="detail-title"><span class="ticker-stamp">{{ detail.ticker }}</span><div><h3>{{ detail.name }}</h3><p>{{ detail.category }} <span>·</span> {{ detail.region }} <span>·</span> {{ detail.issuer }}</p></div></div>
+      <div class="detail-kpis"><div><span>LAST PRICE</span><strong>{{ detail.last_price }}</strong></div><div><span>AUM</span><strong>{{ detail.aum }}</strong></div><div><span>EXPENSE RATIO</span><strong>{{ detail.expense_ratio }}</strong></div><div><span>1Y SHARPE</span><strong>{{ detail.sharpe }}</strong></div></div>
+      <div class="return-strip">{% for item in detail.returns %}<div><span>{{ item.label }}</span><strong>{{ item.value }}</strong></div>{% endfor %}</div>
+      <div id="detail-chart" class="chart chart-detail"></div><p class="risk-snapshot"><strong>Risk snapshot</strong> {{ detail.risk_snapshot }}</p>
+      </article>
+    </section>
+    {% endif %}
+    <footer class="page-footer">Curated US and Canada ETF universe · Adjusted closes from Yahoo Finance · AUM and fund metadata can lag issuer reporting · Not investment advice.</footer>
+    {% else %}
+    <section class="empty-state"><div class="empty-icon">↗</div><p class="eyebrow">WAREHOUSE SETUP</p><h2>Market data is not available yet</h2><p>{{ empty_message }}</p>
+      {% if unpopulated %}<form method="post" action="{% url 'dashboard:sync' %}">{% csrf_token %}{% for region in unpopulated %}<input type="hidden" name="region" value="{{ region }}">{% endfor %}<input type="hidden" name="period" value="{{ period }}"><button class="button button-primary" type="submit">Sync selected region(s)</button></form>{% endif %}
+      <p class="muted">You can also run <code>python -m warehouse.ingest</code> from the project directory.</p>
+    </section>
+    <footer class="page-footer">Curated US and Canada ETF universe · Research and monitoring only, not investment advice.</footer>
+    {% endif %}
+  </main>
+</div>
+
+{% if has_data %}
+{{ category_chart|json_script:"category-chart-data" }}
+{{ issuer_chart|json_script:"issuer-chart-data" }}
+{% if comparison_chart %}{{ comparison_chart|json_script:"comparison-chart-data" }}{% endif %}
+{% if correlation_chart %}{{ correlation_chart|json_script:"correlation-chart-data" }}{% endif %}
+{{ detail.chart|json_script:"detail-chart-data" }}
+<script>
+  window.dashboardCharts = {
+    category: JSON.parse(document.getElementById("category-chart-data").textContent),
+    issuer: JSON.parse(document.getElementById("issuer-chart-data").textContent),
+    {% if comparison_chart %}comparison: JSON.parse(document.getElementById("comparison-chart-data").textContent),{% endif %}
+    {% if correlation_chart %}correlation: JSON.parse(document.getElementById("correlation-chart-data").textContent),{% endif %}
+    detail: JSON.parse(document.getElementById("detail-chart-data").textContent)
+  };
+</script>
+{% endif %}
+{% endblock %}

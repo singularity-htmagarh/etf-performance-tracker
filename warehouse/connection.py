@@ -2,7 +2,7 @@
 warehouse/connection.py
 ------------------------
 Connection helper for the ETF warehouse DuckDB file. Handles first-run
-schema creation so every caller (ingest jobs, the Streamlit app, ad-hoc
+schema creation so every caller (ingest jobs, the Django app, ad-hoc
 notebooks) gets a ready-to-query database with a single function call.
 """
  
@@ -27,7 +27,7 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     Parameters
     ----------
     read_only:
-        Pass True for callers that only ever query (e.g. the Streamlit
+        Pass True for callers that only ever query (e.g. the Django
         app's normal read path). DuckDB allows multiple concurrent
         read-only connections; use read_only=False only for ingestion
         jobs that write.

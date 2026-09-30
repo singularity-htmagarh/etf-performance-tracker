@@ -4,7 +4,7 @@ etf_universe.py
 Curated universe of large, liquid US and Canadian-listed ETFs.
  
 This is a *candidate* list only. Actual inclusion in the tracker is
-decided at runtime by the AUM filter (AUM > $1B) applied in app.py,
+decided at runtime by the AUM filter (AUM > $1B) applied by the dashboard,
 using live `totalAssets` pulled from yfinance. Keeping a curated
 candidate list (rather than scanning the whole tape) keeps API calls
 bounded and avoids pulling in thin/derivative/leveraged products that

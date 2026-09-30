@@ -2,9 +2,9 @@
 data_engine.py
 ---------------
 Data acquisition and performance-metrics computation for the ETF tracker.
-All external calls go through yfinance. Everything here is cached at the
-Streamlit layer (app.py) via st.cache_data — this module stays a plain,
-testable library with no Streamlit dependency.
+All external calls go through yfinance. Warehouse reads are cached by the
+Django dashboard service; this module stays a plain, testable library with
+no web-framework dependency.
 """
  
 from __future__ import annotations

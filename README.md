@@ -1,6 +1,6 @@
 # ETF Performance Tracker
 
-A Streamlit dashboard for monitoring the performance, risk, and positioning of large, liquid ETFs listed in the United States and Canada. The app uses a curated ETF universe, applies a live assets-under-management (AUM) screen, downloads market data from Yahoo Finance through `yfinance`, and calculates comparable return and risk metrics.
+A Django web application for monitoring the performance, risk, and positioning of large, liquid ETFs listed in the United States and Canada. The app uses a curated ETF universe, applies an assets-under-management (AUM) screen, reads market data from a local DuckDB warehouse, and calculates comparable return and risk metrics.
 
 This project tracks ETF market performance. It does not connect to a brokerage account or calculate the performance of a user's actual holdings.
 
@@ -44,13 +44,14 @@ Metrics that do not have enough price history are shown as unavailable. The benc
 
 1. `etf_universe.py` defines the candidate symbols and static labels for name, region, category, and issuer. Canadian symbols use Yahoo Finance's `.TO` suffix.
 2. `data_engine.py` retrieves fund metadata and adjusted daily prices, applies the AUM screen, and builds the performance table.
-3. `app.py` provides the Streamlit interface, caching, filters, charts, table styling, and CSV download.
+3. `dashboard/` provides the Django views, request filters, templates, charts, and CSV download. Warehouse reads are cached for 15 minutes.
 
 Metadata is retrieved from `yfinance.Ticker.info`, including reported total assets, expense ratio, distribution yield, and currency. Price history is retrieved in bulk with `yfinance.download(..., auto_adjust=True)`.
 
 ## Requirements
 
 - Python 3.10 or newer is recommended because the code uses modern type-annotation syntax.
+- Django 5.x is used for the web application.
 - Network access to Yahoo Finance is required when the app loads or refreshes data.
 
 Install the dependencies with:
@@ -59,23 +60,29 @@ Install the dependencies with:
 python -m pip install -r requirements.txt
 ```
 
-## Run the dashboard
+## Run the Django application
 
-From the repository root:
+Install dependencies, initialize Django's local database, and start the development server:
 
 ```bash
-streamlit run app.py
+python -m pip install -r requirements.txt
+python manage.py migrate
+python manage.py runserver
 ```
 
-Streamlit will display a local URL, typically `http://localhost:8501`.
+Open `http://127.0.0.1:8000/`. To populate or refresh market data, use the warehouse sync button or run `python -m warehouse.ingest` from the repository root. Yahoo Finance access is required for sync; the dashboard reads the local warehouse between syncs.
 
 ## Project structure
 
 ```text
 .
-├── app.py              # Streamlit dashboard and user controls
+├── manage.py           # Django command-line entry point
+├── config/             # Django settings and ASGI/WSGI configuration
+├── dashboard/          # Django views, data preparation, templates, and tests
+├── static/dashboard/   # Dashboard styling and chart interactions
 ├── data_engine.py      # Yahoo Finance access and metric calculations
 ├── etf_universe.py     # Curated ETF metadata and ticker list
+├── warehouse/          # DuckDB schema, queries, and Yahoo Finance ingestion
 ├── requirements.txt    # Python dependencies
 └── README.md           # Project documentation
 ```
@@ -93,7 +100,7 @@ Streamlit will display a local URL, typically `http://localhost:8501`.
 
 Local DuckDB data layer for the ETF Performance Tracker. Stores US and
 Canada ETF data in **separate schemas** so the two are never mixed,
-and gives the Streamlit app a fast, offline-capable read path instead
+and gives the Django app a fast, offline-capable read path instead
 of hitting Yahoo Finance on every page load.
 
 ## Layout
@@ -103,7 +110,7 @@ warehouse/
   schema.sql          DDL — run automatically on first connection
   connection.py        get_connection(), schema_for(region)
   ingest.py             ETL job: Yahoo Finance -> DuckDB
-  queries.py             Read helpers used by app.py
+  queries.py             Read helpers used by dashboard/services.py
   etf_warehouse.duckdb  the actual database file (git-ignored, created on first ingest)
 ```
 
@@ -134,7 +141,7 @@ personal trading infrastructure.
 **Note:** the $1B AUM liquidity screen is *not* applied at ingestion
 time — the warehouse stores the full candidate universe (see
 `etf_universe.py`) as-is. The filter is applied at read time in
-`app.py`, so moving the AUM slider in the UI doesn't require
+`dashboard/services.py`, so moving the AUM control in the UI doesn't require
 re-ingesting.
 
 ## Usage
@@ -156,19 +163,18 @@ python -m warehouse.ingest --period 5y
 This creates `warehouse/etf_warehouse.duckdb` if it doesn't exist yet,
 applies `schema.sql`, and upserts fund metadata + prices.
 
-### From the Streamlit app
+### From the Django app
 
-`app.py` reads from the warehouse by default via `warehouse/queries.py`.
-The sidebar has a **"🔄 Sync from Yahoo Finance now"** button that
-calls the same `run_ingestion()` function used by the CLI, for the
-currently-selected region(s), then clears the Streamlit cache and
-reruns. If a selected region has never been synced, the app tells you
-and stops rather than silently showing nothing.
+`dashboard/services.py` reads from the warehouse via `warehouse/queries.py`.
+The sidebar's **Sync from Yahoo Finance** action calls the same
+`run_ingestion()` function used by the CLI for the selected region(s),
+then clears the Django process cache. If a region has never been synced,
+the dashboard offers a sync action instead of silently showing no data.
 
 ### Scheduling
 
 `run_ingestion()` / `run_full_refresh()` in `ingest.py` are plain
-functions with no Streamlit dependency, so they drop straight into a
+functions with no web-framework dependency, so they drop straight into a
 Prefect flow or a scheduled GitHub Actions job the same way the rest
 of the personal trading infra is orchestrated — e.g. a nightly
 `python -m warehouse.ingest` after market close.
@@ -197,8 +203,8 @@ con.execute("SELECT ticker, aum FROM us_etf.funds ORDER BY aum DESC LIMIT 10").f
 
 Because a subfolder literally named `duckdb` sitting at the repo root
 shadows the real `duckdb` PyPI package the moment the repo root is on
-`sys.path` (which it is when you run `streamlit run app.py` from the
-repo root) — every `import duckdb` anywhere in the app, including the
+`sys.path` (which it is when you run Django from the repo root) — every
+`import duckdb` anywhere in the app, including the
 genuine library import inside these files, would resolve to the local
 folder instead and break. `warehouse/` avoids the collision while
 keeping the same "DuckDB warehouse" naming already used elsewhere in
