@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from typing import Any
 
 import numpy as np
@@ -17,6 +18,8 @@ from warehouse.queries import (
     get_last_ingestion,
     load_funds_multi,
     load_prices_multi,
+    load_signal_dates_multi,
+    load_signals_multi,
     warehouse_is_populated,
 )
 
@@ -33,7 +36,7 @@ DISPLAY_COLUMNS = (
 )
 PERCENT_COLUMNS = {
     "1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "Vol_1Y_Ann",
-    "MaxDD_1Y", "MaxDD_3Y", "expense_ratio",
+    "MaxDD_1Y", "MaxDD_3Y", "expense_ratio", "atr_pct", "ema_spread_pct",
 }
 
 
@@ -93,7 +96,7 @@ def build_dashboard_context(params: Any) -> dict[str, Any]:
     period = params.get("period") if params.get("period") in PERIODS else "3y"
     benchmark = params.get("benchmark") if params.get("benchmark") in BENCHMARKS else "SPY"
     active_tab = params.get("tab", "overview")
-    valid_tabs = {"overview", "table", "charts", "correlation", "detail"}
+    valid_tabs = {"overview", "table", "charts", "correlation", "detail", "signals"}
     if active_tab not in valid_tabs:
         active_tab = "overview"
 
@@ -127,6 +130,13 @@ def build_dashboard_context(params: Any) -> dict[str, Any]:
         return context
 
     fund_info = _cached_funds(regions)
+    if active_tab == "signals":
+        context.update(_signal_context(fund_info, regions, params))
+        context["has_data"] = not fund_info.empty
+        if fund_info.empty:
+            context["empty_message"] = "No fund metadata is available for the selected regions."
+        return context
+
     screened = apply_liquidity_screen(fund_info, min_aum=min_aum_b * 1e9)
     if screened.empty:
         context["empty_message"] = "No ETFs passed the selected AUM and region filters."
@@ -167,6 +177,99 @@ def _global_params(regions: tuple[str, ...], min_aum: float, period: str, benchm
     values = [("regions_present", "1"), ("min_aum", str(min_aum)), ("period", period), ("benchmark", benchmark)]
     values.extend(("region", region) for region in regions)
     return values
+
+
+def _signal_context(fund_info: pd.DataFrame, regions: tuple[str, ...], params: Any) -> dict[str, Any]:
+    signal_dates = load_signal_dates_multi(list(regions))
+    requested_date = params.get("signal_date")
+    selected_date = requested_date if requested_date in signal_dates else (signal_dates[0] if signal_dates else "")
+    signals = load_signals_multi(
+        list(regions), as_of_date=date.fromisoformat(selected_date) if selected_date else None
+    )
+    if not signals.empty and not fund_info.empty:
+        labels = [column for column in ("name", "region", "category") if column in fund_info.columns]
+        signals = signals.join(fund_info[labels], how="left")
+
+    rsi_options = ("Overbought", "Neutral", "Oversold", "Insufficient History")
+    volatility_options = ("High Volatility", "Medium Volatility", "Low Volatility", "Insufficient History")
+    trend_options = (
+        "Entering Uptrend", "Uptrend", "Extended Uptrend", "Neutral",
+        "Entering Downtrend", "Downtrend", "Extended Downtrend", "Insufficient History",
+    )
+    rsi_filter = params.get("rsi_signal", "")
+    volatility_filter = params.get("volatility_regime", "")
+    trend_filter = params.get("trend_signal", "")
+    if rsi_filter not in rsi_options:
+        rsi_filter = ""
+    if volatility_filter not in volatility_options:
+        volatility_filter = ""
+    if trend_filter not in trend_options:
+        trend_filter = ""
+
+    filtered = signals.copy()
+    if rsi_filter and not filtered.empty:
+        filtered = filtered[filtered["rsi_signal"] == rsi_filter]
+    if volatility_filter and not filtered.empty:
+        filtered = filtered[filtered["volatility_regime"] == volatility_filter]
+    if trend_filter and not filtered.empty:
+        filtered = filtered[filtered["trend_signal"] == trend_filter]
+
+    signal_rows = []
+    if not filtered.empty:
+        for ticker, row in filtered.sort_index().iterrows():
+            signal_rows.append({
+                "ticker": ticker,
+                "name": _signal_text(row.get("name"), ticker),
+                "region": _signal_text(row.get("region")),
+                "date": pd.to_datetime(row["price_date"]).strftime("%Y-%m-%d"),
+                "close": _display(row.get("close"), "Last_Price"),
+                "ema_50": _display(row.get("ema_50"), "Last_Price"),
+                "ema_200": _display(row.get("ema_200"), "Last_Price"),
+                "ema_spread": _display(row.get("ema_spread"), "Last_Price"),
+                "ema_spread_pct": _display(row.get("ema_spread_pct"), "atr_pct"),
+                "rsi_14": f"{row['rsi_14']:.1f}" if pd.notna(row.get("rsi_14")) else "—",
+                "rsi_signal": _signal_text(row.get("rsi_signal"), "Needs refresh"),
+                "rsi_class": _status_class(row.get("rsi_signal")),
+                "atr_14": _display(row.get("atr_14"), "Last_Price"),
+                "atr_pct": _display(row.get("atr_pct"), "atr_pct"),
+                "volatility_regime": _signal_text(row.get("volatility_regime"), "Needs refresh"),
+                "volatility_class": _status_class(row.get("volatility_regime")),
+                "trend_signal": _signal_text(row.get("trend_signal"), "Needs refresh"),
+                "trend_class": _status_class(row.get("trend_signal")),
+            })
+
+    return {
+        "signal_dates": signal_dates,
+        "signal_date": selected_date,
+        "signal_rows": signal_rows,
+        "signal_etf_count": len(signals),
+        "overbought_count": int((signals.get("rsi_signal", pd.Series(dtype=str)) == "Overbought").sum()),
+        "oversold_count": int((signals.get("rsi_signal", pd.Series(dtype=str)) == "Oversold").sum()),
+        "high_volatility_count": int((signals.get("volatility_regime", pd.Series(dtype=str)) == "High Volatility").sum()),
+        "entering_trend_count": int(signals.get("trend_signal", pd.Series(dtype=str)).isin(("Entering Uptrend", "Entering Downtrend")).sum()),
+        "rsi_options": rsi_options,
+        "volatility_options": volatility_options,
+        "trend_options": trend_options,
+        "rsi_filter": rsi_filter,
+        "volatility_filter": volatility_filter,
+        "trend_filter": trend_filter,
+        "global_params": _global_params(
+            regions,
+            _bounded_float(params.get("min_aum"), 1.0, 1.0, 50.0),
+            params.get("period") if params.get("period") in PERIODS else "3y",
+            params.get("benchmark") if params.get("benchmark") in BENCHMARKS else "SPY",
+        ),
+    }
+
+
+def _signal_text(value: Any, fallback: str = "—") -> str:
+    return fallback if value is None or pd.isna(value) else str(value)
+
+
+def _status_class(value: Any) -> str:
+    if value is None or pd.isna(value):
+        return "pending"
+    return str(value).lower().replace(" ", "-")
 
 
 def _performance_context(

@@ -41,7 +41,7 @@ if str(_REPO_ROOT) not in sys.path:
 import pandas as pd
  
 from etf_universe import UNIVERSE
-from data_engine import fetch_fund_info, fetch_price_history
+from data_engine import compute_technical_indicators, fetch_fund_info, fetch_price_ohlc
 from warehouse.connection import get_connection, schema_for
  
  
@@ -87,22 +87,28 @@ def run_ingestion(region: str, period: str = "3y", tickers: list[str] | None = N
         con.unregister("fund_info")
  
         # ---- price history ----
-        prices_wide = fetch_price_history(tickers, period=period)
-        if not prices_wide.empty:
-            date_col = prices_wide.index.name or "index"
-            prices_long = (
-                prices_wide.reset_index()
-                .rename(columns={date_col: "price_date"})
-                .melt(id_vars=["price_date"], var_name="ticker", value_name="close")
-                .dropna(subset=["close"])
-            )
+        prices_long = fetch_price_ohlc(tickers, period=period)
+        if not prices_long.empty:
+            prices_long = pd.concat(
+                [
+                    compute_technical_indicators(ticker_prices.set_index("price_date")).assign(ticker=ticker)
+                    for ticker, ticker_prices in prices_long.groupby("ticker", sort=False)
+                ]
+            ).reset_index(names="price_date")
             prices_long["price_date"] = pd.to_datetime(prices_long["price_date"]).dt.date
  
             con.execute(f"DELETE FROM {schema}.prices WHERE ticker IN (SELECT ticker FROM prices_long)")
             con.register("prices_long", prices_long)
             con.execute(f"""
-                INSERT INTO {schema}.prices
-                SELECT ticker, price_date, close FROM prices_long
+                INSERT INTO {schema}.prices (
+                    ticker, price_date, high, low, close,
+                      ema_50, ema_200, ema_spread, ema_spread_pct,
+                      rsi_14, rsi_signal, atr_14, atr_pct, volatility_regime, trend_signal
+                )
+                SELECT ticker, price_date, high, low, close,
+                      ema_50, ema_200, ema_spread, ema_spread_pct,
+                      rsi_14, rsi_signal, atr_14, atr_pct, volatility_regime, trend_signal
+                FROM prices_long
             """)
             con.unregister("prices_long")
             price_rows_upserted = len(prices_long)

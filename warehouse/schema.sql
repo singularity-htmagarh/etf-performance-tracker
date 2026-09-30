@@ -10,7 +10,7 @@
 -- Each region schema has the same two tables:
 --   funds   -- one row per ticker, fund-level metadata (AUM, expense
 --             ratio, etc.) that gets overwritten on each ingestion run
---   prices  -- one row per (ticker, date), daily adjusted close
+--   prices  -- one row per (ticker, date), adjusted OHLC and indicators
 --
 -- A single shared `ingestion_log` table (default/main schema) tracks
 -- every ingestion run across both regions for auditability.
@@ -36,9 +36,34 @@ CREATE TABLE IF NOT EXISTS us_etf.funds (
 CREATE TABLE IF NOT EXISTS us_etf.prices (
     ticker      VARCHAR,
     price_date  DATE,
+    high        DOUBLE,
+    low         DOUBLE,
     close       DOUBLE,
+    ema_50      DOUBLE,
+    ema_200     DOUBLE,
+    ema_spread  DOUBLE,
+    ema_spread_pct DOUBLE,
+    rsi_14      DOUBLE,
+    rsi_signal  VARCHAR,
+    atr_14      DOUBLE,
+    atr_pct     DOUBLE,
+    volatility_regime VARCHAR,
+    trend_signal VARCHAR,
     PRIMARY KEY (ticker, price_date)
 );
+
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS high DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS low DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS ema_50 DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS ema_200 DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS ema_spread DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS ema_spread_pct DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS rsi_14 DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS rsi_signal VARCHAR;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS atr_14 DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS atr_pct DOUBLE;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS volatility_regime VARCHAR;
+ALTER TABLE us_etf.prices ADD COLUMN IF NOT EXISTS trend_signal VARCHAR;
  
 -- ---------------- Canada ----------------
 CREATE TABLE IF NOT EXISTS ca_etf.funds (
@@ -57,9 +82,34 @@ CREATE TABLE IF NOT EXISTS ca_etf.funds (
 CREATE TABLE IF NOT EXISTS ca_etf.prices (
     ticker      VARCHAR,
     price_date  DATE,
+    high        DOUBLE,
+    low         DOUBLE,
     close       DOUBLE,
+    ema_50      DOUBLE,
+    ema_200     DOUBLE,
+    ema_spread  DOUBLE,
+    ema_spread_pct DOUBLE,
+    rsi_14      DOUBLE,
+    rsi_signal  VARCHAR,
+    atr_14      DOUBLE,
+    atr_pct     DOUBLE,
+    volatility_regime VARCHAR,
+    trend_signal VARCHAR,
     PRIMARY KEY (ticker, price_date)
 );
+
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS high DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS low DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS ema_50 DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS ema_200 DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS ema_spread DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS ema_spread_pct DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS rsi_14 DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS rsi_signal VARCHAR;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS atr_14 DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS atr_pct DOUBLE;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS volatility_regime VARCHAR;
+ALTER TABLE ca_etf.prices ADD COLUMN IF NOT EXISTS trend_signal VARCHAR;
  
 -- ---------------- Shared: ingestion audit log ----------------
 CREATE TABLE IF NOT EXISTS main.ingestion_log (

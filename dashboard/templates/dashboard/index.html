@@ -50,11 +50,20 @@
   <main class="main-content">
     <header class="page-header">
       <div><p class="eyebrow">US & CANADA · LIQUID ETF UNIVERSE</p><h1>ETF Performance Tracker</h1>
-      {% if has_data %}<p class="subtitle">Tracking <strong>{{ performance_count }}</strong> ETFs above <strong>${{ min_aum_b|floatformat:1 }}B</strong> across {{ region_count }} region(s) and {{ category_count }} categories.</p>{% else %}<p class="subtitle">Performance, risk, and positioning across large, liquid exchange-traded funds.</p>{% endif %}</div>
+      {% if has_data %}{% if active_tab == 'signals' %}<p class="subtitle">Daily technical signals for <strong>{{ signal_etf_count }}</strong> ETFs as of <strong>{{ signal_date }}</strong>.</p>{% else %}<p class="subtitle">Tracking <strong>{{ performance_count }}</strong> ETFs above <strong>${{ min_aum_b|floatformat:1 }}B</strong> across {{ region_count }} region(s) and {{ category_count }} categories.</p>{% endif %}{% else %}<p class="subtitle">Performance, risk, and positioning across large, liquid exchange-traded funds.</p>{% endif %}</div>
       <span class="market-badge"><i></i> WAREHOUSE VIEW</span>
     </header>
 
     {% if has_data %}
+    {% if active_tab == 'signals' %}
+    <section class="kpi-grid" aria-label="Technical signal summary">
+      <article class="kpi"><span>ETFs WITH SIGNAL DATA</span><strong>{{ signal_etf_count }}</strong><small>All selected-region ETFs</small></article>
+      <article class="kpi"><span>RSI OVERBOUGHT</span><strong>{{ overbought_count }}</strong><small>RSI ≥ 70</small></article>
+      <article class="kpi"><span>RSI OVERSOLD</span><strong>{{ oversold_count }}</strong><small>RSI ≤ 30</small></article>
+      <article class="kpi"><span>HIGH VOLATILITY</span><strong>{{ high_volatility_count }}</strong><small>Relative ATR regime</small></article>
+      <article class="kpi"><span>ENTERING TREND</span><strong>{{ entering_trend_count }}</strong><small>New EMA phase today</small></article>
+    </section>
+    {% else %}
     <section class="kpi-grid" aria-label="Market summary">
       <article class="kpi"><span>ETFs IN SCOPE</span><strong>{{ performance_count }}</strong><small>Current filters</small></article>
       <article class="kpi"><span>TOTAL AUM TRACKED</span><strong>{{ total_aum }}</strong><small>Across selected regions</small></article>
@@ -62,6 +71,7 @@
       <article class="kpi"><span>WORST 1D</span><strong>{{ worst_ticker }}</strong><small class="negative">{{ worst_return }}</small></article>
       <article class="kpi"><span>AVERAGE YTD</span><strong>{{ average_ytd }}</strong><small>Equal-weighted</small></article>
     </section>
+    {% endif %}
 
     <nav class="tabs" aria-label="Dashboard sections">
       <a href="?tab=overview" data-tab-link="overview" class="{% if active_tab == 'overview' %}active{% endif %}">Market Overview</a>
@@ -69,6 +79,7 @@
       <a href="?tab=charts" data-tab-link="charts" class="{% if active_tab == 'charts' %}active{% endif %}">Comparison Charts</a>
       <a href="?tab=correlation" data-tab-link="correlation" class="{% if active_tab == 'correlation' %}active{% endif %}">Correlation</a>
       <a href="?tab=detail" data-tab-link="detail" class="{% if active_tab == 'detail' %}active{% endif %}">ETF Detail</a>
+      <a href="?tab=signals" data-tab-link="signals" class="{% if active_tab == 'signals' %}active{% endif %}">Technical Signals</a>
     </nav>
 
     {% if active_tab == 'overview' %}
@@ -97,6 +108,26 @@
         {% for row in table_rows %}<tr><th>{{ row.ticker }}</th>{% for value in row.cells %}<td>{{ value }}</td>{% endfor %}</tr>{% endfor %}
       </tbody></table></div>
       <p class="table-footnote">Showing {{ table_rows|length }} of {{ performance_count }} ETFs · returns calculated from adjusted daily closes.</p>
+    </section>
+    {% elif active_tab == 'signals' %}
+    <section class="content-section">
+      <div class="section-heading"><div><p class="eyebrow">DAILY MARKET STATE</p><h2>Technical signals</h2></div><span class="unit-note">As of {{ signal_date }} · {{ signal_rows|length }} shown</span></div>
+      <form method="get" class="signal-filters">
+        {% for name, value in global_params %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+        <input type="hidden" name="tab" value="signals">
+        <label>Signal date<select name="signal_date">{% for available_date in signal_dates %}<option value="{{ available_date }}" {% if available_date == signal_date %}selected{% endif %}>{{ available_date }}</option>{% endfor %}</select></label>
+        <label>RSI state<select name="rsi_signal"><option value="">All</option>{% for option in rsi_options %}<option value="{{ option }}" {% if option == rsi_filter %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>Volatility regime<select name="volatility_regime"><option value="">All</option>{% for option in volatility_options %}<option value="{{ option }}" {% if option == volatility_filter %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <label>Trend state<select name="trend_signal"><option value="">All</option>{% for option in trend_options %}<option value="{{ option }}" {% if option == trend_filter %}selected{% endif %}>{{ option }}</option>{% endfor %}</select></label>
+        <button class="button button-primary" type="submit">Update signals</button>
+      </form>
+      <div class="table-wrap"><table class="performance-table signals-table"><thead><tr>
+        <th>Ticker</th><th>ETF</th><th>Region</th><th>Signal Date</th><th>Close</th><th>EMA 50</th><th>EMA 200</th><th>Spread</th><th>Spread %</th><th>RSI 14</th><th>RSI State</th><th>ATR 14</th><th>ATR %</th><th>Volatility</th><th>Trend State</th>
+      </tr></thead><tbody>
+        {% for row in signal_rows %}<tr><th>{{ row.ticker }}</th><td class="name-cell">{{ row.name }}</td><td>{{ row.region }}</td><td>{{ row.date }}</td><td>{{ row.close }}</td><td>{{ row.ema_50 }}</td><td>{{ row.ema_200 }}</td><td>{{ row.ema_spread }}</td><td>{{ row.ema_spread_pct }}</td><td>{{ row.rsi_14 }}</td><td><span class="signal-badge {{ row.rsi_class }}">{{ row.rsi_signal }}</span></td><td>{{ row.atr_14 }}</td><td>{{ row.atr_pct }}</td><td><span class="signal-badge {{ row.volatility_class }}">{{ row.volatility_regime }}</span></td><td><span class="signal-badge {{ row.trend_class }}">{{ row.trend_signal }}</span></td></tr>
+        {% empty %}<tr><td class="empty-table" colspan="15">No ETFs match these signal filters for the selected date.</td></tr>{% endfor %}
+      </tbody></table></div>
+      <p class="table-footnote">Signal history is stored per ETF and trading date in the warehouse. Volatility is relative to each ETF’s trailing one-year ATR/close distribution.</p>
     </section>
     {% elif active_tab == 'charts' %}
     <section class="content-section">

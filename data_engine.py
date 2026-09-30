@@ -17,6 +17,12 @@ from etf_universe import ALL_TICKERS, META_BY_TICKER
 TRADING_DAYS_YEAR = 252
 RISK_FREE_RATE_ANNUAL = 0.045  # proxy — update to current T-bill / CORRA rate as needed
 MIN_AUM = 1_000_000_000  # $1B liquidity floor
+RSI_OVERSOLD = 30.0
+RSI_OVERBOUGHT = 70.0
+ATR_REGIME_LOOKBACK = 252
+ATR_REGIME_MIN_PERIODS = 60
+EMA_NEUTRAL_BAND = 0.005
+EMA_EXTENDED_BAND = 0.05
  
  
 # --------------------------------------------------------------------------
@@ -69,6 +75,16 @@ def fetch_price_history(tickers: list[str], period: str = "3y") -> pd.DataFrame:
     (far cheaper than one call per ticker). Returns a wide DataFrame:
     index = date, columns = ticker.
     """
+    ohlc = fetch_price_ohlc(tickers, period=period)
+    if ohlc.empty:
+        return pd.DataFrame()
+    prices = ohlc.pivot(index="price_date", columns="ticker", values="close")
+    prices.index = pd.to_datetime(prices.index)
+    return prices.dropna(how="all")
+
+
+def fetch_price_ohlc(tickers: list[str], period: str = "3y") -> pd.DataFrame:
+    """Bulk-download adjusted daily high, low, and close in long ticker/date form."""
     if not tickers:
         return pd.DataFrame()
  
@@ -85,19 +101,100 @@ def fetch_price_history(tickers: list[str], period: str = "3y") -> pd.DataFrame:
     if raw.empty:
         return pd.DataFrame()
  
+    fields = ["High", "Low", "Close"]
+    frames = []
     if isinstance(raw.columns, pd.MultiIndex):
-        closes = {}
         for t in tickers:
             try:
-                closes[t] = raw[t]["Close"]
+                frame = raw[t][fields].copy()
             except (KeyError, TypeError):
                 continue
-        prices = pd.DataFrame(closes)
+            frame.columns = [column.lower() for column in frame.columns]
+            frame["ticker"] = t
+            frame.index.name = "price_date"
+            frames.append(frame.reset_index())
     else:
-        # single-ticker download shape
-        prices = raw[["Close"]].rename(columns={"Close": tickers[0]})
+        frame = raw[fields].copy()
+        frame.columns = [column.lower() for column in frame.columns]
+        frame["ticker"] = tickers[0]
+        frame.index.name = "price_date"
+        frames.append(frame.reset_index())
  
-    return prices.dropna(how="all")
+    if not frames:
+        return pd.DataFrame()
+    prices = pd.concat(frames, ignore_index=True)
+    prices["price_date"] = pd.to_datetime(prices["price_date"])
+    return prices.dropna(subset=["close"]).sort_values(["ticker", "price_date"])
+
+
+def compute_technical_indicators(prices: pd.DataFrame, period: int = 14) -> pd.DataFrame:
+    """Add 50/200-day EMAs, EMA spread, Wilder RSI, and Wilder ATR to OHLC rows."""
+    result = prices.sort_index().copy()
+    close = result["close"]
+    previous_close = close.shift(1)
+
+    result["ema_50"] = close.ewm(span=50, adjust=False, min_periods=50).mean()
+    result["ema_200"] = close.ewm(span=200, adjust=False, min_periods=200).mean()
+    result["ema_spread"] = result["ema_50"] - result["ema_200"]
+
+    change = close.diff()
+    average_gain = change.clip(lower=0).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    average_loss = -change.clip(upper=0).ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    relative_strength = average_gain / average_loss
+    result["rsi_14"] = 100 - (100 / (1 + relative_strength))
+    result.loc[(average_loss == 0) & (average_gain > 0), "rsi_14"] = 100.0
+    result.loc[(average_gain == 0) & (average_loss > 0), "rsi_14"] = 0.0
+    result.loc[(average_gain == 0) & (average_loss == 0), "rsi_14"] = 50.0
+
+    true_range = pd.concat(
+        [result["high"] - result["low"], (result["high"] - previous_close).abs(),
+         (result["low"] - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    result["atr_14"] = true_range.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+    return compute_technical_signals(result)
+
+
+def compute_technical_signals(indicators: pd.DataFrame) -> pd.DataFrame:
+    """Classify daily RSI, relative ATR volatility, and EMA trend states."""
+    result = indicators.copy()
+
+    rsi_signal = pd.Series("Insufficient History", index=result.index, dtype="object")
+    rsi_signal.loc[result["rsi_14"].between(RSI_OVERSOLD, RSI_OVERBOUGHT, inclusive="neither")] = "Neutral"
+    rsi_signal.loc[result["rsi_14"] <= RSI_OVERSOLD] = "Oversold"
+    rsi_signal.loc[result["rsi_14"] >= RSI_OVERBOUGHT] = "Overbought"
+    result["rsi_signal"] = rsi_signal
+
+    result["atr_pct"] = result["atr_14"] / result["close"]
+    atr_history = result["atr_pct"].rolling(
+        ATR_REGIME_LOOKBACK, min_periods=ATR_REGIME_MIN_PERIODS
+    )
+    low_volatility_threshold = atr_history.quantile(1 / 3)
+    high_volatility_threshold = atr_history.quantile(2 / 3)
+    volatility_regime = pd.Series("Insufficient History", index=result.index, dtype="object")
+    regime_ready = result["atr_pct"].notna() & low_volatility_threshold.notna() & high_volatility_threshold.notna()
+    volatility_regime.loc[regime_ready] = "Medium Volatility"
+    volatility_regime.loc[regime_ready & (result["atr_pct"] < low_volatility_threshold)] = "Low Volatility"
+    volatility_regime.loc[regime_ready & (result["atr_pct"] > high_volatility_threshold)] = "High Volatility"
+    result["volatility_regime"] = volatility_regime
+
+    result["ema_spread_pct"] = result["ema_spread"] / result["ema_200"]
+    spread_pct = result["ema_spread_pct"]
+    trend_signal = pd.Series("Insufficient History", index=result.index, dtype="object")
+    trend_ready = spread_pct.notna()
+    trend_signal.loc[trend_ready] = "Neutral"
+    trend_signal.loc[trend_ready & (spread_pct > EMA_NEUTRAL_BAND)] = "Uptrend"
+    trend_signal.loc[trend_ready & (spread_pct < -EMA_NEUTRAL_BAND)] = "Downtrend"
+
+    previous_spread = spread_pct.shift(1)
+    entering_uptrend = trend_ready & previous_spread.notna() & (spread_pct > EMA_NEUTRAL_BAND) & (previous_spread <= EMA_NEUTRAL_BAND)
+    entering_downtrend = trend_ready & previous_spread.notna() & (spread_pct < -EMA_NEUTRAL_BAND) & (previous_spread >= -EMA_NEUTRAL_BAND)
+    trend_signal.loc[trend_ready & (spread_pct >= EMA_EXTENDED_BAND)] = "Extended Uptrend"
+    trend_signal.loc[trend_ready & (spread_pct <= -EMA_EXTENDED_BAND)] = "Extended Downtrend"
+    trend_signal.loc[entering_uptrend] = "Entering Uptrend"
+    trend_signal.loc[entering_downtrend] = "Entering Downtrend"
+    result["trend_signal"] = trend_signal
+    return result
  
  
 # --------------------------------------------------------------------------

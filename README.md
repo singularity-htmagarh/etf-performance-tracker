@@ -13,16 +13,18 @@ This project tracks ETF market performance. It does not connect to a brokerage a
 - Selectable beta benchmark: `SPY`, `VTI`, `XIC.TO`, or `ACWI`.
 - Cached fund metadata and price history with a force-refresh control.
 - CSV export for the filtered performance table.
+- Daily RSI, relative-volatility, and EMA trend signals with historical-date and state filters.
 
 ## Dashboard sections
 
-The app is organized into five tabs:
+The app is organized into six tabs:
 
 1. **Market Overview**: AUM-weighted average 1-month performance by category, top daily gainers and decliners, and AUM concentration by issuer.
 2. **Performance Table**: Sortable and filterable ETF table with metadata, returns, volatility, Sharpe ratio, maximum drawdown, and beta.
 3. **Comparison Charts**: Normalized price performance and drawdown charts for selected ETFs.
 4. **Correlation**: Return-correlation heatmap for a selected ETF subset.
 5. **ETF Detail**: Price history, key fund metadata, trailing returns, and a risk snapshot for one ETF.
+6. **Technical Signals**: Per-ETF RSI, ATR volatility regime, and EMA trend state, with date and signal filters.
 
 ## Performance metrics
 
@@ -38,21 +40,46 @@ Returns are calculated from adjusted daily closing prices using approximate trad
 | `MaxDD_1Y`, `MaxDD_3Y` | Worst peak-to-trough drawdown over the latest 252 or 756 trading days |
 | `Beta_1Y` | Covariance with the selected benchmark divided by benchmark variance over the latest 252 trading days |
 
+The Technical Signals tab uses these daily classifications:
+
+| Signal | Classification |
+| --- | --- |
+| `rsi_signal` | Oversold at RSI ≤ 30, overbought at RSI ≥ 70, otherwise neutral |
+| `volatility_regime` | Low, medium, or high ATR/close relative to the trailing 252-session distribution; requires at least 60 observations |
+| `trend_signal` | Uptrend/downtrend when the 50/200 EMA spread exceeds ±0.5%; extended at ±5%; entering states mark a threshold crossing |
+
+Signals are shown as insufficient history until their inputs are available. Historical-date selection uses the latest persisted row per ETF on or before the selected trading date.
+
 Metrics that do not have enough price history are shown as unavailable. The benchmark is downloaded alongside the ETF prices when it is not already in the selected universe.
+
+The warehouse `prices` rows also store daily technical indicators:
+
+| Column | Calculation |
+| --- | --- |
+| `ema_50`, `ema_200` | Exponential moving averages of adjusted close, with 50- and 200-session spans |
+| `ema_spread` | `ema_50 - ema_200` |
+| `ema_spread_pct` | EMA spread divided by the 200-session EMA |
+| `rsi_14` | 14-session Wilder-smoothed relative strength index, on a 0-100 scale |
+| `rsi_signal` | Oversold, neutral, or overbought RSI classification |
+| `atr_14` | 14-session Wilder-smoothed true range using adjusted high, low, and prior close; expressed in price units |
+| `atr_pct`, `volatility_regime` | ATR divided by adjusted close and its trailing relative-volatility classification |
+| `trend_signal` | State based on the normalized EMA spread, including threshold crossings and extended trends |
+
+Indicator values are recalculated during ingestion. EMA and RSI values remain null until their warm-up periods are met. Legacy close-only rows are upgraded without data loss, but require a Yahoo Finance sync to populate adjusted high/low and the new indicators.
 
 ## Data flow
 
 1. `etf_universe.py` defines the candidate symbols and static labels for name, region, category, and issuer. Canadian symbols use Yahoo Finance's `.TO` suffix.
-2. `data_engine.py` retrieves fund metadata and adjusted daily prices, applies the AUM screen, and builds the performance table.
+2. `data_engine.py` retrieves fund metadata and adjusted daily OHLC prices, calculates technical indicators and performance metrics, and applies the AUM screen.
 3. `dashboard/` provides the Django views, request filters, templates, charts, and CSV download. Warehouse reads are cached for 15 minutes.
 
-Metadata is retrieved from `yfinance.Ticker.info`, including reported total assets, expense ratio, distribution yield, and currency. Price history is retrieved in bulk with `yfinance.download(..., auto_adjust=True)`.
+Metadata is retrieved from `yfinance.Ticker.info`, including reported total assets, expense ratio, distribution yield, and currency. Adjusted OHLC price history is retrieved in bulk with `yfinance.download(..., auto_adjust=True)`.
 
 ## Requirements
 
 - Python 3.10 or newer is recommended because the code uses modern type-annotation syntax.
 - Django 5.x is used for the web application.
-- Network access to Yahoo Finance is required when the app loads or refreshes data.
+- Network access to Yahoo Finance is required when market data is synced.
 
 Install the dependencies with:
 
@@ -128,7 +155,7 @@ Each has:
 - **`funds`** — one row per ticker: name, category, issuer, currency,
   AUM, expense ratio, dividend yield, `last_updated`. Overwritten in
   full on every sync for that region.
-- **`prices`** — one row per `(ticker, price_date)`: adjusted close.
+- **`prices`** — one row per `(ticker, price_date)`: adjusted high, low, and close plus 50/200 EMA, EMA spread, RSI(14), and ATR(14).
   Upserted per ticker (old rows for a ticker are deleted and replaced
   with the freshly pulled range) so re-syncing is idempotent — no
   duplicate rows, no manual cleanup.
@@ -161,7 +188,9 @@ python -m warehouse.ingest --period 5y
 ```
 
 This creates `warehouse/etf_warehouse.duckdb` if it doesn't exist yet,
-applies `schema.sql`, and upserts fund metadata + prices.
+applies or upgrades `schema.sql`, and upserts fund metadata, adjusted OHLC,
+and technical indicators. Run a US sync after upgrading to populate the
+new columns for existing US price history.
 
 ### From the Django app
 

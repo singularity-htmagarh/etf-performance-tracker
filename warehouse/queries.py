@@ -88,6 +88,59 @@ def load_prices_multi(regions: list[str], tickers: list[str] | None = None) -> p
     for f in frames[1:]:
         out = out.join(f, how="outer")
     return out
+
+
+def load_signals(region: str, as_of_date=None) -> pd.DataFrame:
+    """Return each ticker's latest persisted signal row on or before a date."""
+    if not warehouse_exists():
+        return pd.DataFrame()
+    schema = schema_for(region)
+    con = get_connection(read_only=True)
+    try:
+        query = f"""
+            SELECT ticker, price_date, close, ema_50, ema_200, ema_spread,
+                   ema_spread_pct, rsi_14, rsi_signal, atr_14, atr_pct,
+                   volatility_regime, trend_signal
+            FROM {schema}.prices
+            WHERE (? IS NULL OR price_date <= ?)
+            QUALIFY ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY price_date DESC) = 1
+        """
+        params = [as_of_date, as_of_date]
+        rows = con.execute(query, params).fetchdf()
+    finally:
+        con.close()
+    if rows.empty:
+        return rows
+    return rows.set_index("ticker")
+
+
+def load_signals_multi(regions: list[str], as_of_date=None) -> pd.DataFrame:
+    """Return the latest per-ticker signal snapshot across selected regions."""
+    frames = [load_signals(region, as_of_date=as_of_date) for region in regions]
+    frames = [frame for frame in frames if not frame.empty]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames)
+
+
+def load_signal_dates_multi(regions: list[str], limit: int = 252) -> list[str]:
+    """List recent dates with stored prices across selected regions, newest first."""
+    if not regions or not warehouse_exists():
+        return []
+    selects = [f"SELECT price_date FROM {schema_for(region)}.prices" for region in regions]
+    query = f"""
+        SELECT DISTINCT price_date
+        FROM ({' UNION ALL '.join(selects)}) AS price_dates
+        WHERE price_date IS NOT NULL
+        ORDER BY price_date DESC
+        LIMIT ?
+    """
+    con = get_connection(read_only=True)
+    try:
+        dates = con.execute(query, [limit]).fetchdf()["price_date"]
+    finally:
+        con.close()
+    return pd.to_datetime(dates).dt.strftime("%Y-%m-%d").tolist()
  
  
 def get_last_ingestion(region: str | None = None) -> pd.DataFrame:
