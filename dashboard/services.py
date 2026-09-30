@@ -26,6 +26,36 @@ from warehouse.queries import (
 REGIONS = ("US", "Canada")
 PERIODS = ("1y", "2y", "3y", "5y")
 BENCHMARKS = ("SPY", "VTI", "XIC.TO", "ACWI")
+US_SECTOR_ETFS = ("XLK", "XLF", "XLY", "XLV", "XLI", "XLU", "XLE", "XLP", "GDX", "VNQ", "VOX")
+CANADA_SECTOR_ETFS = (
+    "XFN.TO", "XEG.TO", "XHC.TO", "XUT.TO", "XMA.TO", "XST.TO", "XIT.TO", "XRE.TO", "XCD.TO",
+)
+US_SECTOR_NAMES = {
+    "XLK": "Technology",
+    "XLF": "Financials",
+    "XLY": "Consumer Discretionary",
+    "XLV": "Healthcare",
+    "XLI": "Industrials",
+    "XLU": "Utilities",
+    "XLE": "Energy",
+    "XLP": "Consumer Staples",
+    "GDX": "Materials",
+    "VNQ": "Real Estate",
+    "VOX": "Telecom",
+}
+CANADA_SECTOR_NAMES = {
+    "XFN.TO": "Financials",
+    "XEG.TO": "Energy",
+    "XHC.TO": "Healthcare",
+    "XUT.TO": "Utilities",
+    "XMA.TO": "Materials",
+    "XST.TO": "Consumer Staples",
+    "XIT.TO": "Technology",
+    "XRE.TO": "Real Estate",
+    "XCD.TO": "Consumer Discretionary",
+}
+SECTOR_ETFS_BY_REGION = {"US": US_SECTOR_ETFS, "Canada": CANADA_SECTOR_ETFS}
+SECTOR_NAMES_BY_REGION = {"US": US_SECTOR_NAMES, "Canada": CANADA_SECTOR_NAMES}
 SORT_COLUMNS = (
     "aum", "1D", "1W", "1M", "3M", "6M", "YTD", "1Y", "3Y", "Sharpe_1Y", "Vol_1Y_Ann",
 )
@@ -70,9 +100,20 @@ def _display(value: Any, column: str) -> str:
     return str(value)
 
 
-def _last_sync_status() -> list[dict[str, str]]:
+def _compact_aum(value: Any) -> str:
+    if pd.isna(value):
+        return "—"
+    amount = float(value)
+    for threshold, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
+        if abs(amount) >= threshold:
+            scaled = f"{amount / threshold:.1f}".rstrip("0").rstrip(".")
+            return f"${scaled}{suffix}"
+    return f"${amount:,.0f}"
+
+
+def _last_sync_status(regions: tuple[str, ...] = REGIONS) -> list[dict[str, str]]:
     result = []
-    for region in REGIONS:
+    for region in regions:
         last = get_last_ingestion(region=region)
         if last.empty:
             result.append({"region": region, "status": "Never synced", "synced": ""})
@@ -94,11 +135,21 @@ def build_dashboard_context(params: Any) -> dict[str, Any]:
         regions = REGIONS
     min_aum_b = _bounded_float(params.get("min_aum"), 1.0, 1.0, 50.0)
     period = params.get("period") if params.get("period") in PERIODS else "3y"
-    benchmark = params.get("benchmark") if params.get("benchmark") in BENCHMARKS else "SPY"
     active_tab = params.get("tab", "overview")
-    valid_tabs = {"overview", "table", "charts", "correlation", "detail", "signals"}
+    valid_tabs = {"overview", "canada", "table", "charts", "correlation", "detail", "signals"}
     if active_tab not in valid_tabs:
         active_tab = "overview"
+    if active_tab == "canada":
+        regions = ("Canada",)
+    elif active_tab == "overview":
+        regions = ("US",)
+    default_benchmark = "XIC.TO" if active_tab == "canada" else "SPY"
+    benchmark = params.get("benchmark") if params.get("benchmark") in BENCHMARKS else default_benchmark
+    sector_region = None
+    if active_tab == "canada":
+        sector_region = "Canada"
+    elif active_tab == "overview":
+        sector_region = "US" if "US" in regions else ("Canada" if "Canada" in regions else None)
 
     context: dict[str, Any] = {
         "regions": regions,
@@ -110,7 +161,18 @@ def build_dashboard_context(params: Any) -> dict[str, Any]:
         "benchmark": benchmark,
         "benchmark_options": BENCHMARKS,
         "active_tab": active_tab,
-        "last_sync": _last_sync_status(),
+        "page_title": (
+            "Market Overview - Canada" if active_tab == "canada"
+            else "Market Overview - US" if active_tab == "overview"
+            else "ETF Performance Tracker"
+        ),
+        "page_eyebrow": (
+            "CANADIAN ETF UNIVERSE" if active_tab == "canada"
+            else "US ETF UNIVERSE" if active_tab == "overview"
+            else "US & CANADA · LIQUID ETF UNIVERSE"
+        ),
+        "sector_region": sector_region,
+        "last_sync": _last_sync_status(regions),
         "min_aum_default": MIN_AUM / 1e9,
         "has_data": False,
         "global_params": _global_params(regions, min_aum_b, period, benchmark),
@@ -161,7 +223,9 @@ def build_dashboard_context(params: Any) -> dict[str, Any]:
         return context
     performance = performance.sort_values("aum", ascending=False)
 
-    context.update(_performance_context(performance, prices, params, benchmark, period, regions))
+    context.update(
+        _performance_context(performance, fund_info, prices, params, benchmark, period, regions, sector_region)
+    )
     context["has_data"] = True
     return context
 
@@ -274,11 +338,13 @@ def _status_class(value: Any) -> str:
 
 def _performance_context(
     performance: pd.DataFrame,
+    fund_info: pd.DataFrame,
     prices: pd.DataFrame,
     params: Any,
     benchmark: str,
     period: str,
     regions: tuple[str, ...],
+    sector_region: str | None,
 ) -> dict[str, Any]:
     categories = sorted(performance["category"].dropna().unique().tolist())
     category_values = [category for category in params.getlist("category") if category in categories]
@@ -332,6 +398,9 @@ def _performance_context(
     )
     category_chart.update_layout(coloraxis_showscale=False, height=520, xaxis_tickformat=".1%")
 
+    sector_signal_chart, sector_signal_rows, sector_summary, sector_signal_date = _sector_signal_view(
+        prices, regions, fund_info, sector_region
+    )
     issuer_aum = performance.groupby("issuer")["aum"].sum().sort_values(ascending=False).reset_index()
     issuer_chart = px.treemap(issuer_aum, path=["issuer"], values="aum", color="aum", color_continuous_scale="Blues")
     issuer_chart.update_layout(height=380, margin=dict(t=10, l=10, r=10, b=10))
@@ -362,6 +431,10 @@ def _performance_context(
         "gainers": _mover_rows(movers.head(5)),
         "decliners": _mover_rows(movers.tail(5).sort_values("1D")),
         "category_chart": _plot_json(category_chart),
+        "sector_signal_chart": _plot_json(sector_signal_chart) if sector_signal_chart else None,
+        "sector_signal_rows": sector_signal_rows,
+        "sector_summary": sector_summary,
+        "sector_signal_date": sector_signal_date,
         "issuer_chart": _plot_json(issuer_chart),
         "ticker_options": [
             {"ticker": ticker, "name": row["name"]}
@@ -385,6 +458,125 @@ def _mover_rows(frame: pd.DataFrame) -> list[dict[str, str]]:
         {"ticker": ticker, "name": row["name"], "return": _display(row["1D"], "1D")}
         for ticker, row in frame.iterrows()
     ]
+
+
+def _sector_signal_view(
+    prices: pd.DataFrame,
+    regions: tuple[str, ...],
+    fund_info: pd.DataFrame,
+    sector_region: str | None,
+) -> tuple[go.Figure | None, list[dict[str, str]], list[dict[str, str]], str]:
+    if sector_region not in SECTOR_ETFS_BY_REGION or sector_region not in regions:
+        return None, [], [], ""
+    try:
+        signals = load_signals_multi([sector_region])
+    except Exception:  # pragma: no cover - warehouse lock or transient access issue
+        return None, [], [], ""
+    if signals.empty:
+        return None, [], [], ""
+    sector_tickers = SECTOR_ETFS_BY_REGION[sector_region]
+    sector_df = signals.reindex(sector_tickers).copy()
+    sector_df["sector_name"] = sector_df.index.map(SECTOR_NAMES_BY_REGION[sector_region])
+    if "aum" in fund_info:
+        sector_df["aum_b"] = pd.to_numeric(fund_info["aum"].reindex(sector_tickers), errors="coerce") / 1e9
+    else:
+        sector_df["aum_b"] = np.nan
+    sector_df = sector_df.sort_values("ema_spread_pct", ascending=True, na_position="last")
+    sector_df["rsi_signal"] = sector_df["rsi_signal"].fillna("Insufficient History")
+    sector_df["volatility_regime"] = sector_df["volatility_regime"].fillna("Insufficient History")
+    sector_df["trend_signal"] = sector_df["trend_signal"].fillna("Insufficient History")
+
+    max_aum = sector_df["aum_b"].max()
+    size_reference = 2 * max_aum / (52 ** 2) if pd.notna(max_aum) and max_aum > 0 else 1
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=sector_df.index,
+            y=sector_df["ema_spread_pct"],
+            mode="markers+text",
+            text=sector_df.index,
+            textposition="top center",
+            marker={
+                "size": sector_df["aum_b"].fillna(0),
+                "sizemode": "area",
+                "sizeref": size_reference,
+                "sizemin": 10,
+                "color": sector_df["rsi_14"].fillna(50),
+                "colorscale": "RdYlGn",
+                "cmin": 30,
+                "cmax": 70,
+                "showscale": True,
+                "colorbar": {"title": "RSI 14", "tickvals": [30, 50, 70]},
+                "line": {"width": 2, "color": "rgba(17, 24, 39, 0.5)"},
+            },
+            hovertemplate=(
+                "<b>%{x}</b><br>" +
+                "Sector: %{customdata[0]}<br>" +
+                "EMA spread: %{y:.2%}<br>" +
+                "RSI: %{customdata[3]:.1f}<br>" +
+                "ATR %: %{customdata[1]:.2%}<br>" +
+                "Trend: %{customdata[2]}<br>" +
+                "AUM: %{customdata[4]:,.1f}B<extra></extra>"
+            ),
+            customdata=sector_df[["sector_name", "atr_pct", "trend_signal", "rsi_14", "aum_b"]].to_numpy(),
+        )
+    )
+    fig.add_hline(y=0, line_dash="solid", line_color="rgba(71, 85, 105, 0.5)")
+    fig.update_layout(
+        height=420,
+        title=f"{sector_region} sector signal board · bubbles scaled by AUM",
+        xaxis_title="Sector ETF",
+        yaxis_title="EMA spread vs EMA 200",
+        xaxis_tickangle=-20,
+        margin=dict(t=42, r=18, b=62, l=48),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        yaxis_tickformat=".1%",
+    )
+
+    signal_date = pd.to_datetime(sector_df["price_date"], errors="coerce").max()
+    signal_date_text = signal_date.strftime("%Y-%m-%d") if pd.notna(signal_date) else ""
+    sector_summary = [
+        {
+            "label": "POSITIVE EMA SPREAD",
+            "value": str(int((sector_df["ema_spread_pct"] > 0).sum())),
+            "detail": "above EMA 200",
+        },
+        {
+            "label": "RSI OVERBOUGHT",
+            "value": str(int((sector_df["rsi_signal"] == "Overbought").sum())),
+            "detail": "RSI at or above 70",
+        },
+        {
+            "label": "RSI OVERSOLD",
+            "value": str(int((sector_df["rsi_signal"] == "Oversold").sum())),
+            "detail": "RSI at or below 30",
+        },
+        {
+            "label": "HIGH VOLATILITY",
+            "value": str(int((sector_df["volatility_regime"] == "High Volatility").sum())),
+            "detail": "relative ATR regime",
+        },
+    ]
+    rows = []
+    for ticker, row in sector_df.iterrows():
+        row_date = pd.to_datetime(row.get("price_date"), errors="coerce")
+        rows.append({
+            "ticker": ticker,
+            "sector": row["sector_name"],
+            "date": row_date.strftime("%m/%d/%y") if pd.notna(row_date) else "—",
+            "date_full": row_date.strftime("%Y-%m-%d") if pd.notna(row_date) else "—",
+            "aum": _compact_aum(row.get("aum_b") * 1e9 if pd.notna(row.get("aum_b")) else np.nan),
+            "ema_spread_pct": _display(row["ema_spread_pct"], "ema_spread_pct"),
+            "rsi_14": f"{row['rsi_14']:.1f}" if pd.notna(row.get("rsi_14")) else "—",
+            "rsi_signal": _signal_text(row.get("rsi_signal"), "Insufficient History"),
+            "rsi_class": _status_class(row.get("rsi_signal")),
+            "atr_pct": _display(row["atr_pct"], "atr_pct"),
+            "volatility_regime": _signal_text(row.get("volatility_regime"), "Insufficient History"),
+            "volatility_class": _status_class(row.get("volatility_regime")),
+            "trend_signal": _signal_text(row.get("trend_signal"), "Insufficient History"),
+            "trend_class": _status_class(row.get("trend_signal")),
+        })
+    return fig, rows, sector_summary, signal_date_text
 
 
 def _comparison_chart(prices: pd.DataFrame, tickers: list[str]) -> dict[str, Any] | None:

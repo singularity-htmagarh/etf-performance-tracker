@@ -12,6 +12,7 @@
     window.Plotly.newPlot(target, spec.data || [], layout, config);
   };
   draw("category-chart", charts.category);
+  draw("sector-signal-chart", charts.sectorSignal);
   draw("issuer-chart", charts.issuer);
   draw("comparison-chart", charts.comparison);
   draw("correlation-chart", charts.correlation);

@@ -75,6 +75,8 @@ UNIVERSE: list[ETFMeta] = [
     ETFMeta("XLRE", "Real Estate Select Sector SPDR Fund", "US", "US Sector", "State Street"),
     ETFMeta("XLC", "Communication Services Select Sector SPDR Fund", "US", "US Sector", "State Street"),
     ETFMeta("VNQ", "Vanguard Real Estate ETF", "US", "US Sector", "Vanguard"),
+    ETFMeta("VOX", "Vanguard Communication Services ETF", "US", "US Sector", "Vanguard"),
+    ETFMeta("GDX", "VanEck Gold Miners ETF", "US", "US Sector", "VanEck"),
  
     # ---------------- US : International / Global ----------------
     ETFMeta("VEA", "Vanguard FTSE Developed Markets ETF", "US", "International Equity", "Vanguard"),
@@ -127,6 +129,15 @@ UNIVERSE: list[ETFMeta] = [
     ETFMeta("ZAG.TO", "BMO Aggregate Bond Index ETF", "Canada", "Canada Fixed Income", "BMO"),
     ETFMeta("VAB.TO", "Vanguard Canadian Aggregate Bond Index ETF", "Canada", "Canada Fixed Income", "Vanguard"),
     ETFMeta("HXT.TO", "Global X S&P/TSX 60 Index Corporate Class ETF", "Canada", "Canada Broad Equity", "Global X"),
+    ETFMeta("XFN.TO", "iShares S&P/TSX Capped Financials Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XEG.TO", "iShares S&P/TSX Capped Energy Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XHC.TO", "iShares S&P/TSX Capped Health Care Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XUT.TO", "iShares S&P/TSX Capped Utilities Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XMA.TO", "iShares S&P/TSX Capped Materials Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XST.TO", "iShares S&P/TSX Capped Consumer Staples Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XIT.TO", "iShares S&P/TSX Capped Information Technology Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XRE.TO", "iShares S&P/TSX Capped REIT Index ETF", "Canada", "Canada Sector", "BlackRock"),
+    ETFMeta("XCD.TO", "iShares S&P/TSX Capped Consumer Discretionary Index ETF", "Canada", "Canada Sector", "BlackRock"),
 ]
  
 ALL_TICKERS: list[str] = [m.ticker for m in UNIVERSE]

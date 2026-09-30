@@ -11,12 +11,15 @@
     <form method="get" class="filters-form" id="global-filters">
       <input type="hidden" name="regions_present" value="1">
       <input type="hidden" name="tab" value="{{ active_tab }}">
-      <fieldset class="region-options">
+      {% if active_tab == 'canada' or active_tab == 'overview' %}
+      <fieldset class="region-options"><legend>Region</legend><label class="check-row"><input type="checkbox" checked disabled><span>{% if active_tab == 'canada' %}Canada{% else %}US{% endif %}</span></label></fieldset>
+      <input type="hidden" name="region" value="{% if active_tab == 'canada' %}Canada{% else %}US{% endif %}">
+      {% else %}<fieldset class="region-options">
         <legend>Region</legend>
         {% for option in region_options %}
         <label class="check-row"><input type="checkbox" name="region" value="{{ option }}" {% if option in regions %}checked{% endif %}><span>{{ option }}</span></label>
         {% endfor %}
-      </fieldset>
+      </fieldset>{% endif %}
       <label class="field-label" for="min-aum">Minimum AUM <strong>${{ min_aum_b|floatformat:1 }}B</strong></label>
       <input id="min-aum" type="range" name="min_aum" min="1" max="50" step="0.5" value="{{ min_aum_b }}">
       <label class="field-label" for="period">Price history window</label>
@@ -49,7 +52,7 @@
 
   <main class="main-content">
     <header class="page-header">
-      <div><p class="eyebrow">US & CANADA · LIQUID ETF UNIVERSE</p><h1>ETF Performance Tracker</h1>
+      <div><p class="eyebrow">{{ page_eyebrow }}</p><h1>{{ page_title }}</h1>
       {% if has_data %}{% if active_tab == 'signals' %}<p class="subtitle">Daily technical signals for <strong>{{ signal_etf_count }}</strong> ETFs as of <strong>{{ signal_date }}</strong>.</p>{% else %}<p class="subtitle">Tracking <strong>{{ performance_count }}</strong> ETFs above <strong>${{ min_aum_b|floatformat:1 }}B</strong> across {{ region_count }} region(s) and {{ category_count }} categories.</p>{% endif %}{% else %}<p class="subtitle">Performance, risk, and positioning across large, liquid exchange-traded funds.</p>{% endif %}</div>
       <span class="market-badge"><i></i> WAREHOUSE VIEW</span>
     </header>
@@ -74,7 +77,8 @@
     {% endif %}
 
     <nav class="tabs" aria-label="Dashboard sections">
-      <a href="?tab=overview" data-tab-link="overview" class="{% if active_tab == 'overview' %}active{% endif %}">Market Overview</a>
+      <a href="?tab=overview" data-tab-link="overview" class="{% if active_tab == 'overview' %}active{% endif %}">Market Overview - US</a>
+      <a href="?tab=canada&amp;region=Canada&amp;regions_present=1" data-tab-link="canada" class="{% if active_tab == 'canada' %}active{% endif %}">Market Overview - Canada</a>
       <a href="?tab=table" data-tab-link="table" class="{% if active_tab == 'table' %}active{% endif %}">Performance Table</a>
       <a href="?tab=charts" data-tab-link="charts" class="{% if active_tab == 'charts' %}active{% endif %}">Comparison Charts</a>
       <a href="?tab=correlation" data-tab-link="correlation" class="{% if active_tab == 'correlation' %}active{% endif %}">Correlation</a>
@@ -82,9 +86,25 @@
       <a href="?tab=signals" data-tab-link="signals" class="{% if active_tab == 'signals' %}active{% endif %}">Technical Signals</a>
     </nav>
 
-    {% if active_tab == 'overview' %}
+    {% if active_tab == 'overview' or active_tab == 'canada' %}
     <section class="content-section overview-grid">
       <article class="panel chart-panel"><div class="panel-heading"><div><p class="eyebrow">RELATIVE PERFORMANCE</p><h2>Category performance</h2></div><span class="unit-note">AUM-weighted · 1M</span></div><div id="category-chart" class="chart"></div></article>
+      {% if sector_signal_chart %}
+      <article class="panel chart-panel sector-panel"><div class="panel-heading"><div><p class="eyebrow">{{ sector_region|upper }} SECTOR SIGNAL WATCH</p><h2>Sector market state</h2></div><span class="unit-note">As of {{ sector_signal_date }} · bubble size: AUM · color: RSI</span></div>
+        <div class="detail-kpis sector-summary" aria-label="{{ sector_region }} sector breadth">
+          {% for item in sector_summary %}<div><span>{{ item.label }}</span><strong>{{ item.value }}</strong><small>{{ item.detail }}</small></div>{% endfor %}
+        </div>
+        <div id="sector-signal-chart" class="chart"></div>
+        <div class="table-wrap sector-table-wrap">
+          <table class="performance-table sector-table">
+            <thead><tr><th>ETF</th><th>Sector</th><th>Signal Date</th><th>AUM</th><th>EMA Spread</th><th>RSI</th><th>RSI State</th><th>ATR %</th><th>Volatility</th><th>Trend</th></tr></thead>
+            <tbody>
+              {% for row in sector_signal_rows %}<tr><th>{{ row.ticker }}</th><td>{{ row.sector }}</td><td title="{{ row.date_full }}">{{ row.date }}</td><td>{{ row.aum }}</td><td>{{ row.ema_spread_pct }}</td><td>{{ row.rsi_14 }}</td><td><span class="signal-badge {{ row.rsi_class }}">{{ row.rsi_signal }}</span></td><td>{{ row.atr_pct }}</td><td><span class="signal-badge {{ row.volatility_class }}">{{ row.volatility_regime }}</span></td><td><span class="signal-badge {{ row.trend_class }}">{{ row.trend_signal }}</span></td></tr>{% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      {% endif %}
       <article class="panel movers-panel"><div class="panel-heading"><div><p class="eyebrow">DAILY LEADERSHIP</p><h2>Top movers</h2></div><span class="unit-note">1D return</span></div>
         <h3 class="list-title">Gainers</h3>{% for row in gainers %}<div class="mover-row"><span><b>{{ row.ticker }}</b><small>{{ row.name }}</small></span><strong class="positive">{{ row.return }}</strong></div>{% empty %}<p class="muted">No daily returns available.</p>{% endfor %}
         <h3 class="list-title decliner-title">Decliners</h3>{% for row in decliners %}<div class="mover-row"><span><b>{{ row.ticker }}</b><small>{{ row.name }}</small></span><strong class="negative">{{ row.return }}</strong></div>{% empty %}<p class="muted">No daily returns available.</p>{% endfor %}
@@ -179,6 +199,7 @@
 
 {% if has_data %}
 {{ category_chart|json_script:"category-chart-data" }}
+{% if sector_signal_chart %}{{ sector_signal_chart|json_script:"sector-signal-chart-data" }}{% endif %}
 {{ issuer_chart|json_script:"issuer-chart-data" }}
 {% if comparison_chart %}{{ comparison_chart|json_script:"comparison-chart-data" }}{% endif %}
 {% if correlation_chart %}{{ correlation_chart|json_script:"correlation-chart-data" }}{% endif %}
@@ -186,6 +207,7 @@
 <script>
   window.dashboardCharts = {
     category: JSON.parse(document.getElementById("category-chart-data").textContent),
+    {% if sector_signal_chart %}sectorSignal: JSON.parse(document.getElementById("sector-signal-chart-data").textContent),{% endif %}
     issuer: JSON.parse(document.getElementById("issuer-chart-data").textContent),
     {% if comparison_chart %}comparison: JSON.parse(document.getElementById("comparison-chart-data").textContent),{% endif %}
     {% if correlation_chart %}correlation: JSON.parse(document.getElementById("correlation-chart-data").textContent),{% endif %}
